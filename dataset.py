@@ -36,17 +36,33 @@ import pandas as pd
 # CONFIGURATION
 # ─────────────────────────────────────────────────────────────────────
 
+
 HUB_AIRPORTS = {
     'ATL': 'Atlanta Hartsfield-Jackson',
-    'ORD': "Chicago O'Hare",
     'DFW': 'Dallas/Fort Worth',
     'DEN': 'Denver International',
+    'ORD': "Chicago O'Hare",
     'LAX': 'Los Angeles International',
     'JFK': 'New York JFK',
     'CLT': 'Charlotte Douglas',
     'LAS': 'Las Vegas Harry Reid',
+    'MCO': 'Orlando International',
+    'MIA': 'Miami International',
     'PHX': 'Phoenix Sky Harbor',
+    'SEA': 'Seattle-Tacoma International',
+    'SFO': 'San Francisco International',
+    'EWR': 'Newark Liberty International',
     'IAH': 'Houston George Bush',
+    'BOS': 'Boston Logan International',
+    'MSP': 'Minneapolis-St. Paul International',
+    'FLL': 'Fort Lauderdale-Hollywood International',
+    'LGA': 'New York LaGuardia',
+    'DTW': 'Detroit Metro Wayne County',
+    'PHL': 'Philadelphia International',
+    'SLC': 'Salt Lake City International',
+    'BWI': 'Baltimore/Washington International',
+    'IAD': 'Washington Dulles International',
+    'SAN': 'San Diego International'
 }
 
 BTS_BASE_URL = (
@@ -62,6 +78,29 @@ KEEP_COLUMNS = [
     'CARRIER_DELAY', 'WEATHER_DELAY', 'NAS_DELAY',
     'SECURITY_DELAY', 'LATE_AIRCRAFT_DELAY', 'DISTANCE',
 ]
+
+# BTS uses different column names depending on download method and year.
+# Map every known variant to our canonical names.
+COLUMN_NAME_MAP = {
+    'FlightDate': 'FL_DATE', 'FL_DATE': 'FL_DATE',
+    'Reporting_Airline': 'OP_UNIQUE_CARRIER', 'REPORTING_AIRLINE': 'OP_UNIQUE_CARRIER',
+    'OP_UNIQUE_CARRIER': 'OP_UNIQUE_CARRIER', 'UNIQUE_CARRIER': 'OP_UNIQUE_CARRIER',
+    'IATA_CODE_Reporting_Airline': 'IATA_CARRIER',
+    'Origin': 'ORIGIN', 'ORIGIN': 'ORIGIN',
+    'Dest': 'DEST', 'DEST': 'DEST',
+    'CRSDepTime': 'CRS_DEP_TIME', 'CRS_DEP_TIME': 'CRS_DEP_TIME',
+    'DepTime': 'DEP_TIME', 'DEP_TIME': 'DEP_TIME',
+    'DepDelay': 'DEP_DELAY', 'DEP_DELAY': 'DEP_DELAY',
+    'ArrDelay': 'ARR_DELAY', 'ARR_DELAY': 'ARR_DELAY',
+    'Cancelled': 'CANCELLED', 'CANCELLED': 'CANCELLED',
+    'Diverted': 'DIVERTED', 'DIVERTED': 'DIVERTED',
+    'CarrierDelay': 'CARRIER_DELAY', 'CARRIER_DELAY': 'CARRIER_DELAY',
+    'WeatherDelay': 'WEATHER_DELAY', 'WEATHER_DELAY': 'WEATHER_DELAY',
+    'NASDelay': 'NAS_DELAY', 'NAS_DELAY': 'NAS_DELAY',
+    'SecurityDelay': 'SECURITY_DELAY', 'SECURITY_DELAY': 'SECURITY_DELAY',
+    'LateAircraftDelay': 'LATE_AIRCRAFT_DELAY', 'LATE_AIRCRAFT_DELAY': 'LATE_AIRCRAFT_DELAY',
+    'Distance': 'DISTANCE', 'DISTANCE': 'DISTANCE',
+}
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -172,7 +211,7 @@ def read_bts_zip(zip_path: Path, hub_filter: set[str] | None = None) -> pd.DataF
                         continue
                     with zf.open(name) as f:
                         header = f.readline().decode('latin-1', errors='replace')
-                    if 'FL_DATE' in header or 'ORIGIN' in header:
+                    if 'FL_DATE' in header or 'ORIGIN' in header or 'FlightDate' in header or 'Origin' in header:
                         with zf.open(name) as f:
                             return _parse_bts_csv(f, hub_filter)
 
@@ -206,17 +245,19 @@ def _parse_bts_csv(file_obj, hub_filter: set[str] | None = None) -> pd.DataFrame
     if unnamed:
         df = df.drop(columns=unnamed)
 
-    df.columns = df.columns.str.strip()
+    df.columns = df.columns.str.strip().str.strip('"')
 
-    # Column name variations across BTS schema years
-    for old, new in [('UNIQUE_CARRIER', 'OP_UNIQUE_CARRIER'),
-                     ('REPORTING_AIRLINE', 'OP_UNIQUE_CARRIER')]:
-        if old in df.columns and new not in df.columns:
-            df = df.rename(columns={old: new})
+    # Map all known BTS column name variants to canonical names
+    rename = {}
+    for orig_col in df.columns:
+        if orig_col in COLUMN_NAME_MAP:
+            rename[orig_col] = COLUMN_NAME_MAP[orig_col]
+    if rename:
+        df = df.rename(columns=rename)
 
     available = [c for c in KEEP_COLUMNS if c in df.columns]
     if not available:
-        print(f"[no expected columns, got: {list(df.columns)[:8]}] ", end='')
+        print(f"[no columns matched, got: {list(df.columns)[:8]}] ", end='')
         return pd.DataFrame()
     df = df[available].copy()
 
@@ -367,13 +408,11 @@ def write_quality_report(panel: pd.DataFrame, output_dir: Path):
 
 def main():
     parser = argparse.ArgumentParser(description='BTS On-Time data ingestion')
-    parser.add_argument('--start-year', type=int, default=2021)
-    parser.add_argument('--end-year', type=int, default=2023)
+    parser.add_argument('--start-year', type=int, default=2018)
+    parser.add_argument('--end-year', type=int, default=2026)
     parser.add_argument('--output-dir', type=str, default='./data')
     parser.add_argument('--skip-download', action='store_true',
                         help='Skip downloads, process existing ZIPs only')
-    parser.add_argument('--force', action='store_true',
-                        help='Force reprocess even if panel CSV exists')
     args = parser.parse_args()
 
     base_dir = Path(args.output_dir)
@@ -394,9 +433,11 @@ def main():
     print(f"\n  STEP 1: Checking for data in {raw_dir}/")
 
     expected = []
+    today = date.today()
     for y in range(args.start_year, args.end_year + 1):
         for m in range(1, 13):
-            if date(y, m, 1) <= date.today():
+            # only include months that have actually occurred
+            if date(y, m, 1) <= date(today.year, today.month, 1):
                 expected.append((y, m))
 
     existing = []
@@ -434,15 +475,11 @@ def main():
 
     print(f"    Ready to process: {len(zip_paths)} ZIPs")
 
-    # ── Check cached panel ──
+    # Delete any old processed panel to force fresh extraction
     panel_csv = proc_dir / 'hub_daily_panel.csv'
-    if panel_csv.exists() and not args.force:
-        print(f"\n  Panel already exists: {panel_csv} ({panel_csv.stat().st_size/1e6:.2f} MB)")
-        print(f"  Use --force to reprocess from ZIPs")
-        panel = pd.read_csv(panel_csv, parse_dates=['date'])
-        print(f"  Loaded: {len(panel):,} rows, {panel['hub'].nunique()} hubs, "
-              f"{panel['date'].nunique()} dates")
-        return
+    if panel_csv.exists():
+        panel_csv.unlink()
+        print(f"\n  Deleted old panel: {panel_csv}")
 
     # ── STEP 2: Extract & parse ──
     print(f"\n  STEP 2: Extracting CSVs from {len(zip_paths)} ZIPs...")
@@ -454,6 +491,11 @@ def main():
         if not df.empty:
             df = clean_flight_records(df)
             print(f"-> {len(df):,} hub flights")
+
+            # Save each month's extracted CSV
+            month_csv = proc_dir / (zp.stem + '.csv')
+            df.to_csv(month_csv, index=False)
+
             all_flights.append(df)
         else:
             print("-> EMPTY")
@@ -468,6 +510,11 @@ def main():
     print(f"  Columns: {list(flights.columns)}")
     print(f"  Dates: {flights['FL_DATE'].min()} -> {flights['FL_DATE'].max()}")
     print(f"  Hubs: {sorted(flights['ORIGIN'].unique())}")
+
+    # Save combined flights
+    all_flights_path = proc_dir / 'all_hub_flights.csv'
+    flights.to_csv(all_flights_path, index=False)
+    print(f"  Saved all flights: {all_flights_path} ({all_flights_path.stat().st_size / 1e6:.1f} MB)")
 
     # ── STEP 3: Aggregate ──
     print(f"\n  STEP 3: Building hub x daily panel...")
@@ -501,6 +548,5 @@ def main():
     print(f"  Shape: {panel.shape[0]:,} rows x {panel.shape[1]} cols")
     print(f"  Next:  python 02_signal_pipeline.py --data-dir {proc_dir}")
 
-
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()
