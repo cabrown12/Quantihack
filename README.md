@@ -1,4 +1,4 @@
-# Alternative Data Alpha: Can Flight Data Predict Airline Mergers?
+# Alternative Data Alpha: Can Aviation Stress Data Predict Airline Mergers and Market Volatility?
 
 **QuantiHack 2026 Finals — Creative Data Manipulation**
 
@@ -207,4 +207,6 @@ BTS On-Time Performance → Hub Daily Panel → Stress Index → Seasonal Decomp
 
 ## Team
 
-Built for QuantiHack 2026 Finals
+Quantile Mechanics 
+
+
