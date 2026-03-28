@@ -252,6 +252,17 @@ df = daily.merge(
 
 df["signal_lag"] = df[signal_col].shift(lag_days)
 
+small_number = 1e-6
+df["stress_surprise"] = df["unexplained_stress"] / (abs(df["expected_stress"]) + small_number)
+df["stress_change_1d"] = df["unexplained_stress"].diff(1)
+df["stress_change_3d"] = df["unexplained_stress"].diff(3)
+
+rolling_mean_20 = df["unexplained_stress"].rolling(20).mean()
+rolling_std_20 = df["unexplained_stress"].rolling(20).std()
+df["stress_z_20"] = (df["unexplained_stress"] - rolling_mean_20) / rolling_std_20
+
+df["positive_stress"] = df["unexplained_stress"].clip(lower=0)
+
 # =========================================================
 # HEADER
 # =========================================================
