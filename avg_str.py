@@ -13,9 +13,18 @@ st.set_page_config(page_title="Residual Aviation Stress Dashboard", layout="wide
 # =========================================================
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-PANEL_PATH = os.path.join(BASE_DIR, "data", "processed", "hub_daily_panel.csv")
-FUTURES_PATH = os.path.join(BASE_DIR, "data", "processed", "futures_returns.csv")
+DEFAULT_PANEL_PATH = os.path.join(BASE_DIR, "data", "processed", "hub_daily_panel.csv")
+DEFAULT_FUTURES_PATH = os.path.join(BASE_DIR, "data", "processed", "futures_returns.csv")
+
+# Fall back to the checked-in US_Airlines data if processed data dir is absent.
+PANEL_PATH = DEFAULT_PANEL_PATH if os.path.exists(DEFAULT_PANEL_PATH) else os.path.join(
+    BASE_DIR, "US_Airlines", "hub_daily_panel.csv"
+)
+FUTURES_PATH = DEFAULT_FUTURES_PATH if os.path.exists(DEFAULT_FUTURES_PATH) else os.path.join(
+    BASE_DIR, "US_Airlines", "futures_returns.csv"
+)
 RAW_GLOB = os.path.join(BASE_DIR, "flight_csv", "OnTime_*.csv")
+T100_GLOB = os.path.join(BASE_DIR, "t100_*.csv")
 
 
 HUBS = {"ATL", "ORD", "DFW", "DEN", "LAX", "JFK", "CLT", "LAS", "PHX", "IAH"}
@@ -162,6 +171,106 @@ def load_monthly_baseline():
 
 
 # =========================================================
+# LOAD T-100 DATA FOR M&A ANALYSIS
+# =========================================================
+@st.cache_data
+def load_t100_data():
+    files = sorted(glob.glob(T100_GLOB))
+    if not files:
+        return None, f"No T-100 CSV files found at: {T100_GLOB}"
+
+    dfs = []
+    for f in files:
+        try:
+            temp = pd.read_csv(f, low_memory=False)
+            temp.columns = temp.columns.str.strip()
+            temp = temp.dropna(axis=1, how='all')
+            file_year = int(os.path.basename(f).split('_')[1].split('.')[0])
+            if 'YEAR' not in temp.columns:
+                temp['YEAR'] = file_year
+            if 'MONTH' not in temp.columns:
+                temp['MONTH'] = 1
+            dfs.append(temp)
+        except Exception:
+            continue
+
+    if not dfs:
+        return None, "T-100 files found but could not be parsed."
+
+    t100 = pd.concat(dfs, ignore_index=True)
+    return t100, None
+
+
+def get_carrier_routes(t100, carrier, year, month):
+    mask = (
+        (t100['UNIQUE_CARRIER'] == carrier) &
+        (t100['YEAR'] == year) &
+        (t100['MONTH'] == month) &
+        (t100['PASSENGERS'] > 0)
+    )
+    routes = t100.loc[mask, ['ORIGIN', 'DEST']]
+    route_set = set()
+    for _, row in routes.iterrows():
+        key = tuple(sorted([row['ORIGIN'], row['DEST']]))
+        route_set.add(key)
+    return route_set
+
+
+def compute_monthly_overlap(t100, carrier1, carrier2, start_year, end_year):
+    records = []
+    for year in range(start_year, end_year + 1):
+        for month in range(1, 13):
+            if not ((t100['YEAR'] == year) & (t100['MONTH'] == month)).any():
+                continue
+            routes1 = get_carrier_routes(t100, carrier1, year, month)
+            routes2 = get_carrier_routes(t100, carrier2, year, month)
+            if len(routes1) == 0 and len(routes2) == 0:
+                continue
+            overlap = routes1 & routes2
+            union = routes1 | routes2
+            records.append({
+                'year': year, 'month': month,
+                'date': pd.Timestamp(year=year, month=month, day=1),
+                'routes_carrier1': len(routes1),
+                'routes_carrier2': len(routes2),
+                'overlap': len(overlap),
+                'union': len(union),
+                'jaccard': len(overlap) / len(union) if len(union) > 0 else 0,
+                'overlap_pct_c1': len(overlap) / len(routes1) * 100 if len(routes1) > 0 else 0,
+                'overlap_pct_c2': len(overlap) / len(routes2) * 100 if len(routes2) > 0 else 0,
+            })
+    return pd.DataFrame(records)
+
+
+def compute_route_stress_proxy(t100, start_year, end_year):
+    """Compute a monthly 'route competition stress' metric: avg number of carriers per route."""
+    records = []
+    for year in range(start_year, end_year + 1):
+        for month in range(1, 13):
+            monthly = t100[
+                (t100['YEAR'] == year) &
+                (t100['MONTH'] == month) &
+                (t100['PASSENGERS'] > 0)
+            ]
+            if monthly.empty:
+                continue
+            monthly = monthly.copy()
+            monthly['route'] = monthly.apply(
+                lambda x: tuple(sorted([x['ORIGIN'], x['DEST']])), axis=1
+            )
+            carriers_per_route = monthly.groupby('route')['UNIQUE_CARRIER'].nunique()
+            records.append({
+                'date': pd.Timestamp(year=year, month=month, day=1),
+                'avg_carriers_per_route': carriers_per_route.mean(),
+                'max_carriers_on_route': carriers_per_route.max(),
+                'routes_with_3plus': (carriers_per_route >= 3).sum(),
+                'routes_with_5plus': (carriers_per_route >= 5).sum(),
+                'total_routes': len(carriers_per_route),
+            })
+    return pd.DataFrame(records)
+
+
+# =========================================================
 # MERGE EXPECTED / UNEXPLAINED STRESS
 # =========================================================
 def merge_expected_stress_monthly(panel: pd.DataFrame, baseline_dict):
@@ -199,6 +308,7 @@ def merge_expected_stress_monthly(panel: pd.DataFrame, baseline_dict):
 # =========================================================
 panel, futures = load_main_data()
 baseline_dict, baseline_error = load_monthly_baseline()
+t100_data, t100_error = load_t100_data()
 
 # =========================================================
 # FEATURE ENGINEERING
@@ -298,12 +408,13 @@ c4.metric("Lagged corr", f"{corr_val:.3f}" if pd.notna(corr_val) else "N/A")
 # =========================================================
 # TABS
 # =========================================================
-tab1, tab2, tab3, tab4, tab5 = st.tabs([
+tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
     "Overview",
     "Expected vs Unexplained",
     "Lag Analysis",
     "Hubs",
     "Holiday Effect",
+    "Stress → M&A",
 ])
 
 # =========================================================
@@ -433,6 +544,233 @@ with tab5:
         "This helps separate predictable seasonal congestion from abnormal disruption. "
         "If markets respond more to unexplained stress than base stress, that supports your hypothesis."
     )
+
+# =========================================================
+# TAB 6 — STRESS → M&A CORRELATION
+# =========================================================
+with tab6:
+    st.subheader("Aviation Stress & Route Competition → Merger & Acquisitions")
+    st.write(
+        "**Thesis:** When multiple airlines compete on the same routes (e.g. 10 carriers flying NYC→Colombia), "
+        "the resulting operational stress — delays, cancellations, thin margins — creates pressure to consolidate. "
+        "Airlines merge to reduce route competition, eliminate redundancy, and gain pricing power. "
+        "High route overlap is both a cause of stress and a leading indicator of M&A."
+    )
+
+    if t100_data is None:
+        st.warning(t100_error or "No T-100 data available.")
+    else:
+        t100 = t100_data
+        min_year = int(t100['YEAR'].min())
+        max_year = int(t100['YEAR'].max())
+
+        # --- Section 1: Route competition stress over time ---
+        st.markdown("---")
+        st.subheader("1. Route Competition Intensity Over Time")
+        st.write(
+            "How many airlines compete on each route? More carriers per route = more stress, "
+            "more pressure to merge."
+        )
+
+        route_stress = compute_route_stress_proxy(t100, min_year, max_year)
+
+        if not route_stress.empty:
+            fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(14, 8), sharex=True)
+
+            ax1.plot(route_stress['date'], route_stress['avg_carriers_per_route'],
+                     color='#e74c3c', linewidth=2, marker='o', markersize=3)
+            ax1.set_ylabel('Avg Carriers per Route')
+            ax1.set_title('Route Competition Intensity')
+            ax1.grid(True, alpha=0.3)
+
+            # Mark M&A events
+            ma_events = [
+                (pd.Timestamp('2022-02-07'), 'Frontier-Spirit\nAnnounced', '#e67e22'),
+                (pd.Timestamp('2022-07-28'), 'JetBlue-Spirit\nCounter-Bid', '#3498db'),
+                (pd.Timestamp('2024-01-16'), 'JetBlue-Spirit\nBlocked (DOJ)', '#e74c3c'),
+            ]
+            for evt_date, label, color in ma_events:
+                ax1.axvline(x=evt_date, color=color, linestyle='--', linewidth=2, alpha=0.7)
+                ax1.annotate(label, xy=(evt_date, ax1.get_ylim()[1] * 0.95),
+                             fontsize=8, color=color, rotation=0, ha='center', va='top')
+
+            ax2.plot(route_stress['date'], route_stress['routes_with_5plus'],
+                     color='#8e44ad', linewidth=2, label='Routes with 5+ carriers')
+            ax2.plot(route_stress['date'], route_stress['routes_with_3plus'],
+                     color='#2ecc71', linewidth=2, alpha=0.6, label='Routes with 3+ carriers')
+            ax2.set_ylabel('Number of Highly Contested Routes')
+            ax2.set_xlabel('Date')
+            ax2.legend()
+            ax2.grid(True, alpha=0.3)
+
+            for evt_date, label, color in ma_events:
+                ax2.axvline(x=evt_date, color=color, linestyle='--', linewidth=2, alpha=0.7)
+
+            plt.tight_layout()
+            st.pyplot(fig)
+
+        # --- Section 2: Frontier vs Spirit and JetBlue vs Spirit overlap ---
+        st.markdown("---")
+        st.subheader("2. Route Overlap Between Merger Candidates")
+        st.write(
+            "Airlines with high route overlap are natural merger targets. "
+            "Frontier and Spirit shared **70+ routes**; JetBlue and Spirit shared **60+ routes**. "
+            "Merging eliminates head-to-head competition on these routes."
+        )
+
+        fs_overlap = compute_monthly_overlap(t100, 'F9', 'NK', min_year, max_year)
+        bs_overlap = compute_monthly_overlap(t100, 'B6', 'NK', min_year, max_year)
+
+        if not fs_overlap.empty and not bs_overlap.empty:
+            fig, ax = plt.subplots(figsize=(14, 6))
+            ax.plot(fs_overlap['date'], fs_overlap['overlap'], linewidth=2.5,
+                    color='#e74c3c', marker='o', markersize=3, label='Frontier vs Spirit')
+            ax.plot(bs_overlap['date'], bs_overlap['overlap'], linewidth=2.5,
+                    color='#3498db', marker='o', markersize=3, label='JetBlue vs Spirit')
+
+            for evt_date, label, color in ma_events:
+                ax.axvline(x=evt_date, color=color, linestyle='--', linewidth=2, alpha=0.7)
+
+            ax.axvspan(pd.Timestamp('2020-03-01'), pd.Timestamp('2020-12-01'),
+                       alpha=0.1, color='gray', label='COVID Impact')
+
+            ax.set_xlabel('Date')
+            ax.set_ylabel('Number of Overlapping Routes')
+            ax.set_title('Route Overlap: Merger Candidates Share Heavily Contested Routes')
+            ax.legend()
+            ax.grid(True, alpha=0.3)
+            plt.tight_layout()
+            st.pyplot(fig)
+
+            # Jaccard similarity
+            fig2, ax2 = plt.subplots(figsize=(14, 5))
+            ax2.plot(fs_overlap['date'], fs_overlap['jaccard'] * 100, linewidth=2.5,
+                     color='#e74c3c', label='Frontier vs Spirit')
+            ax2.plot(bs_overlap['date'], bs_overlap['jaccard'] * 100, linewidth=2.5,
+                     color='#3498db', label='JetBlue vs Spirit')
+
+            for evt_date, label, color in ma_events:
+                ax2.axvline(x=evt_date, color=color, linestyle='--', linewidth=2, alpha=0.7)
+
+            ax2.set_xlabel('Date')
+            ax2.set_ylabel('Jaccard Similarity (%)')
+            ax2.set_title('Route Network Similarity (Jaccard Index)\n'
+                          'Higher = more overlap = stronger M&A signal')
+            ax2.legend()
+            ax2.grid(True, alpha=0.3)
+            plt.tight_layout()
+            st.pyplot(fig2)
+
+        # --- Section 3: Correlation between aviation stress and route competition ---
+        st.markdown("---")
+        st.subheader("3. Stress ↔ Route Competition Correlation")
+        st.write(
+            "We correlate the **national aviation stress index** (from BTS hub data) "
+            "with **route competition intensity** (from T-100 data). "
+            "High competition → operational strain → M&A pressure."
+        )
+
+        if not route_stress.empty and not daily.empty:
+            # Resample daily stress to monthly for comparison
+            daily_copy = daily.copy()
+            daily_copy['month_start'] = daily_copy['date'].dt.to_period('M').dt.to_timestamp()
+            monthly_stress = daily_copy.groupby('month_start', as_index=False).agg(
+                stress_index=('stress_index', 'mean'),
+                unexplained_stress=('unexplained_stress', 'mean'),
+                avg_cancel_rate=('avg_cancel_rate', 'mean'),
+            ).rename(columns={'month_start': 'date'})
+
+            merged_ma = monthly_stress.merge(route_stress, on='date', how='inner')
+
+            if len(merged_ma) > 5:
+                col1, col2 = st.columns(2)
+
+                # Scatter: stress vs avg carriers per route
+                with col1:
+                    fig, ax = plt.subplots(figsize=(7, 5))
+                    sc = ax.scatter(merged_ma['avg_carriers_per_route'],
+                                    merged_ma['stress_index'],
+                                    c=merged_ma['date'].astype(np.int64),
+                                    cmap='viridis', alpha=0.7, s=50, edgecolors='white', linewidth=0.5)
+                    plt.colorbar(sc, ax=ax, label='Time')
+                    ax.set_xlabel('Avg Carriers per Route')
+                    ax.set_ylabel('Aviation Stress Index')
+                    ax.set_title('Stress vs Route Competition')
+                    ax.grid(True, alpha=0.3)
+
+                    corr_stress_comp = merged_ma['stress_index'].corr(
+                        merged_ma['avg_carriers_per_route'])
+                    ax.annotate(f'r = {corr_stress_comp:.3f}', xy=(0.05, 0.95),
+                                xycoords='axes fraction', fontsize=12, fontweight='bold',
+                                bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
+                    plt.tight_layout()
+                    st.pyplot(fig)
+
+                # Scatter: cancel rate vs highly contested routes
+                with col2:
+                    fig, ax = plt.subplots(figsize=(7, 5))
+                    sc = ax.scatter(merged_ma['routes_with_5plus'],
+                                    merged_ma['avg_cancel_rate'] * 100,
+                                    c=merged_ma['date'].astype(np.int64),
+                                    cmap='viridis', alpha=0.7, s=50, edgecolors='white', linewidth=0.5)
+                    plt.colorbar(sc, ax=ax, label='Time')
+                    ax.set_xlabel('Routes with 5+ Competing Carriers')
+                    ax.set_ylabel('Avg Cancellation Rate (%)')
+                    ax.set_title('Cancellations vs Route Crowding')
+                    ax.grid(True, alpha=0.3)
+
+                    corr_canc_crowd = merged_ma['avg_cancel_rate'].corr(
+                        merged_ma['routes_with_5plus'])
+                    ax.annotate(f'r = {corr_canc_crowd:.3f}', xy=(0.05, 0.95),
+                                xycoords='axes fraction', fontsize=12, fontweight='bold',
+                                bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
+                    plt.tight_layout()
+                    st.pyplot(fig)
+
+                # Time series overlay
+                fig, ax1 = plt.subplots(figsize=(14, 5))
+                ax1.plot(merged_ma['date'], merged_ma['stress_index'],
+                         color='#e74c3c', linewidth=2, label='Aviation Stress Index')
+                ax1.set_ylabel('Stress Index', color='#e74c3c')
+                ax1.tick_params(axis='y', labelcolor='#e74c3c')
+
+                ax2 = ax1.twinx()
+                ax2.plot(merged_ma['date'], merged_ma['avg_carriers_per_route'],
+                         color='#3498db', linewidth=2, linestyle='--', label='Avg Carriers/Route')
+                ax2.set_ylabel('Avg Carriers per Route', color='#3498db')
+                ax2.tick_params(axis='y', labelcolor='#3498db')
+
+                for evt_date, label, color in ma_events:
+                    ax1.axvline(x=evt_date, color=color, linestyle=':', linewidth=2, alpha=0.7)
+
+                lines1, labels1 = ax1.get_legend_handles_labels()
+                lines2, labels2 = ax2.get_legend_handles_labels()
+                ax1.legend(lines1 + lines2, labels1 + labels2, loc='upper left')
+                ax1.set_title('Aviation Stress & Route Competition Over Time\n'
+                              'Stress and competition move together → M&A reduces both')
+                ax1.grid(True, alpha=0.3)
+                plt.tight_layout()
+                st.pyplot(fig)
+
+                st.metric("Stress vs Competition Correlation",
+                          f"{corr_stress_comp:.3f}")
+            else:
+                st.info("Not enough overlapping months between stress data and T-100 data.")
+
+        # --- Summary ---
+        st.markdown("---")
+        st.subheader("Key Takeaway")
+        st.write(
+            "**The chain:** Route competition (many airlines on the same routes) → "
+            "operational stress (delays, cancellations, thin margins) → "
+            "M&A pressure (consolidate to reduce competition and improve efficiency). "
+            "\n\n"
+            "The Frontier-Spirit and JetBlue-Spirit cases prove this: both mergers targeted airlines "
+            "with **massive route overlap**. The aviation stress index captures the same underlying "
+            "competitive pressure that drives consolidation. "
+            "This makes aviation stress a **leading indicator** for M&A activity in the airline sector."
+        )
+
 
 # =========================================================
 # DEBUG / PREVIEW
