@@ -1,0 +1,39 @@
+======================================================================
+BTS HUB DAILY PANEL — DATA QUALITY REPORT
+Generated: 2026-03-28T11:57:35.707636
+======================================================================
+
+Date range: 2021-01-01 to 2023-12-29
+Total records: 7,810
+Hubs: ['ATL', 'CLT', 'DEN', 'DFW', 'IAH', 'JFK', 'LAS', 'LAX', 'ORD', 'PHX']
+Business days: 781
+
+--- Coverage by Hub ---
+  ATL: 781 days, avg flights=2672, NaN dep_delay=0.0%, NaN arr_delay=0.0%
+  CLT: 781 days, avg flights=1582, NaN dep_delay=0.0%, NaN arr_delay=0.0%
+  DEN: 781 days, avg flights=1797, NaN dep_delay=0.0%, NaN arr_delay=0.0%
+  DFW: 781 days, avg flights=2095, NaN dep_delay=0.0%, NaN arr_delay=0.0%
+  IAH: 781 days, avg flights=1391, NaN dep_delay=0.0%, NaN arr_delay=0.0%
+  JFK: 781 days, avg flights=1387, NaN dep_delay=0.0%, NaN arr_delay=0.0%
+  LAS: 781 days, avg flights=1200, NaN dep_delay=0.0%, NaN arr_delay=0.0%
+  LAX: 781 days, avg flights=1694, NaN dep_delay=0.0%, NaN arr_delay=0.0%
+  ORD: 781 days, avg flights=2369, NaN dep_delay=0.0%, NaN arr_delay=0.0%
+  PHX: 781 days, avg flights=1294, NaN dep_delay=0.0%, NaN arr_delay=0.0%
+
+--- Delay Statistics ---
+  avg_dep_delay: mean=12.843, std=4.533, min=1.020, max=43.180, skew=1.10
+  avg_arr_delay: mean=10.718, std=4.388, min=0.130, max=37.490, skew=1.02
+  cancel_rate: mean=0.018, std=0.007, min=0.000, max=0.065, skew=0.55
+  frac_delay_30: mean=0.083, std=0.024, min=0.007, max=0.261, skew=0.43
+
+--- Extreme Days (top 10 by avg_dep_delay across all hubs) ---
+  2021-11-16: mean_delay=21.6 min, hubs affected: ATL, ORD, DFW, DEN, LAX, JFK, IAH
+  2022-08-24: mean_delay=21.3 min, hubs affected: ATL, ORD, DEN, LAX, JFK, IAH
+  2022-08-23: mean_delay=21.2 min, hubs affected: ATL, ORD, DFW, DEN, LAX, JFK
+  2022-09-21: mean_delay=19.5 min, hubs affected: ATL, ORD, DFW, DEN, LAX, JFK, CLT, IAH
+  2022-08-22: mean_delay=19.0 min, hubs affected: ATL, ORD, DEN, LAX, JFK, IAH
+  2022-05-30: mean_delay=18.9 min, hubs affected: ATL, ORD, DEN, LAX, JFK, IAH
+  2021-06-02: mean_delay=18.6 min, hubs affected: ORD, DFW, DEN, LAX, JFK, IAH
+  2021-08-02: mean_delay=18.4 min, hubs affected: ATL, ORD, DEN, LAX, JFK, IAH
+  2021-06-01: mean_delay=17.9 min, hubs affected: ATL, ORD, DFW, DEN, LAX, JFK, CLT, IAH
+  2021-07-30: mean_delay=17.6 min, hubs affected: ORD, DFW, DEN, LAX, JFK, CLT, IAH
