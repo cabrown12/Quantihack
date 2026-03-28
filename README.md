@@ -241,6 +241,16 @@ python3 build_hub_panel.py
 
 ## Key Findings
 
+Best Correlation predictions:
+
+<img width="1630" height="694" alt="image" src="https://github.com/user-attachments/assets/31d5fc7b-e9b4-4511-9cbe-5e7b9636cdeb" />
+
+Best result: abs_stress_change_3d vs next_5d_return at lag 7, correlation 0.146.
+Second best: abs_stress_change_3d vs next_3d_return at lag 7, correlation 0.122.
+This suggests sudden changes in aviation stress matter more than raw stress levels.
+residual_share vs volatility also stood out at 0.122.
+Overall, change/surprise-based stress signals look more promising than basic stress measures.
+
 **Route Overlap → M&A Prediction**
 - **Frontier and Spirit shared 90+ overlapping domestic routes** before the merger announcement — both budget carriers competing head-to-head on the same city pairs
 - **JetBlue had 60+ overlapping routes with Spirit**, explaining its counter-bid after Frontier's initial proposal
